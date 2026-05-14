@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Secrets — never commit real keys
+.env
+
+# Runtime audit logs
+*.jsonl
+
+# Runtime output files
+comments_result.json
+result.json
+
+# Virtual envs
+.venv/
+env/
+.conda/
