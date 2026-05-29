@@ -9,7 +9,7 @@ from datetime import datetime
 llm = ChatOpenAI(
     model="deepseek-chat",
     base_url="https://api.deepseek.com",
-    api_key="sk-1ceac9b62a2144a8b8c4726e080b3727",
+    api_key="",
     timeout=30,
     max_retries=2
 )
@@ -131,7 +131,7 @@ workflow.add_conditional_edges(
 def route_by_level(state: RiskState) -> Literal["human_review", "generate_report"]:
     if state["risk_type"]=="political":
         return "human_review"
-    if state["risk_level"] == "高":
+    if state["risk_level"] == "高" or state["risk_level"] == "中":
         return "human_review"
     return "generate_report"
 

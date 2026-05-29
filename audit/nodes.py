@@ -67,66 +67,85 @@ def normalize_input(state: RiskState) -> RiskState:
     return state
 
 
-def identify_risk(state: RiskState) -> RiskState:
-    """Classify content risk type.
+def _apply_offline_result(state: RiskState, offline: dict[str, Any]) -> None:
+    state["risk_type"] = offline["risk_type"]  # type: ignore[typeddict-item]
+    state["confidence"] = offline["confidence"]
+    state["policy_tags"] = offline["policy_tags"]
+    state["evidence"] = offline["evidence"]
 
-    Always runs the offline classifier first, then the judge decides whether
-    to escalate to the LLM API. The LLM is only called when offline is insufficient.
+
+def identify_risk(state: RiskState) -> RiskState:
+    """Classify content risk type — offline-first, escalate to LLM on demand.
+
+    1. Always run the cheap offline classifier first.
+    2. Ask LLMCallJudge whether that offline result is trustworthy.
+    3. Only call the LLM API when the judge says escalation is needed AND the
+       API is configured (not in offline demo mode). This avoids paying for an
+       LLM call on the cases the offline classifier already handles confidently.
+    On any LLM error, fall back to the offline result we already computed.
     """
     text = state["normalized_input"]
     cfg = get_config()
-
-    # Step 1: offline classifier (always runs, zero latency)
-    offline = classifier.identify(text)
-
-    # Step 2: judge — should we call LLM?
-    needs_llm, reason = get_judge().should_call(text, offline)
-    state["judge_reason"] = reason
     state["llm_called"] = False
 
-    # Step 3: try LLM if judge says yes and we're not in offline-only mode
-    if needs_llm and not cfg.offline_demo_mode and cfg.deepseek_api_key:
-        prompt = """
+    # Step 1: offline classifier (cheap, deterministic, always runs)
+    offline = classifier.identify(text)
+
+    # Step 2: judge decides whether the offline result needs LLM verification
+    needs_llm, reason = get_judge().should_call(text, offline)
+
+    # Step 3: skip the LLM when the judge says it's unnecessary, or when the
+    # LLM is simply unavailable (offline demo mode / no API key).
+    llm_available = (not cfg.offline_demo_mode) and bool(cfg.deepseek_api_key)
+    if not needs_llm or not llm_available:
+        _apply_offline_result(state, offline)
+        if not needs_llm:
+            state["judge_reason"] = reason  # e.g. offline_sufficient / high_confidence_compound_rule
+        elif cfg.offline_demo_mode:
+            state["judge_reason"] = "offline_demo_mode"
+        else:
+            state["judge_reason"] = "llm_unavailable_no_api_key"
+        return state
+
+    # Step 4: judge requested escalation → verify with the LLM API
+    prompt = """
 你是内容安全 Agent 的风险识别节点，负责给 UGC 评论做一级分流。
 请只返回 JSON，不要输出 markdown。
 
 字段要求：
 - risk_type: political/minor/illegal/violence/spam/safe/unknown
 - confidence: 0 到 1 的小数
-- policy_tags: 命中的策略标签数组，例如 ["涉政表达", "违法教程"]
+- policy_tags: 命中的策略标签数组，例如 ["涉政表达", "违法教程", "成人色情", "乱伦"]
 - evidence: 从原文中摘取不超过 3 个关键证据，不能编造
 
 判定口径：
 - political: 涉及政治人物、制度、政权、敏感公共事件或煽动性政治表达
-- minor: 涉及未成年人保护、诱导、伤害、成人内容等
+- minor: 涉及未成年人保护、诱导、伤害，或含有明确性行为描写（色情、淫秽、乱伦等成人内容）
 - illegal: 涉及违法犯罪、规避监管、黑灰产、毒品、武器、诈骗等
 - violence: 暴力、血腥、威胁、仇恨攻击
 - spam: 广告引流、刷量、博彩、疑似营销灌水
 - safe: 普通闲聊、生活分享、无明显风险
 - unknown: 信息不足或模型无法确定
 """
-        try:
-            response = get_llm().invoke([
-                SystemMessage(content=prompt),
-                HumanMessage(content=text),
-            ])
-            data = _extract_json(response.content)
-            state["risk_type"] = _normalize_label(data.get("risk_type"), ALLOWED_RISK_TYPES, "unknown")  # type: ignore[typeddict-item]
-            state["confidence"] = _clamp_float(data.get("confidence"))
-            state["policy_tags"] = [str(t)[:40] for t in data.get("policy_tags", [])][:5]
-            state["evidence"] = [str(e)[:120] for e in data.get("evidence", [])][:3]
-            state["llm_called"] = True
-            return state
-        except Exception as exc:
-            # LLM failed → fall through to offline result
-            state["model_error"] = f"identify_risk LLM failed, using offline fallback: {exc}"
-
-    # Step 4: use offline result (either judge said no, or LLM failed)
-    state["risk_type"] = offline["risk_type"]  # type: ignore[typeddict-item]
-    state["confidence"] = offline["confidence"]
-    state["policy_tags"] = offline["policy_tags"]
-    state["evidence"] = offline["evidence"]
-    return state
+    try:
+        response = get_llm().invoke([
+            SystemMessage(content=prompt),
+            HumanMessage(content=text),
+        ])
+        data = _extract_json(response.content)
+        state["risk_type"] = _normalize_label(data.get("risk_type"), ALLOWED_RISK_TYPES, "unknown")  # type: ignore[typeddict-item]
+        state["confidence"] = _clamp_float(data.get("confidence"))
+        state["policy_tags"] = [str(t)[:40] for t in data.get("policy_tags", [])][:5]
+        state["evidence"] = [str(e)[:120] for e in data.get("evidence", [])][:3]
+        state["llm_called"] = True
+        state["judge_reason"] = f"escalated:{reason}"
+        return state
+    except Exception as exc:
+        # LLM failed → fall back to the offline result already computed in step 1
+        _apply_offline_result(state, offline)
+        state["model_error"] = f"identify_risk LLM failed, using offline fallback: {exc}"
+        state["judge_reason"] = f"escalation_failed_offline_fallback:{reason}"
+        return state
 
 
 def analyze_risk(state: RiskState) -> RiskState:

@@ -20,17 +20,33 @@ _SIMPLE_RULES: list[tuple[str, list[str], str]] = [
 
 # Compound rules: at least one hit from EACH group triggers the rule
 # Use tag "未成年涉色" so analyze() can escalate to high severity
+_SEXUAL_TERMS: list[str] = [
+    "鸡巴", "操你", "操我", "做爱", "性爱", "裸体", "淫", "约炮", "性交",
+    "小穴", "阴道", "阴茎", "阴部", "阴户", "阴蒂", "射精", "强奸",
+    "乱伦", "肛交", "口交", "自慰", "插入", "勃起",
+]
+
 _COMPOUND_RULES: list[tuple[str, list[str], list[str], str]] = [
     (
         "minor",
         ["岁", "小学", "初中", "未成年", "儿童", "小孩", "孩子", "少女", "少年"],
-        ["鸡巴", "操你", "操我", "做爱", "性爱", "裸体", "淫", "约炮", "性交"],
+        _SEXUAL_TERMS,
         "未成年涉色",
+    ),
+    (
+        "illegal",
+        ["妹妹", "姐姐", "妈妈", "女儿", "哥哥", "爸爸", "弟弟", "兄妹", "母子", "父女"],
+        _SEXUAL_TERMS,
+        "乱伦涉色",
     ),
 ]
 
-# Explicit adult content without a minor context indicator
-_ADULT_KEYWORDS: list[str] = ["鸡巴", "操你", "操我", "做爱", "性交", "色情", "淫秽", "约炮"]
+# Explicit adult content without a minor/family context indicator
+_ADULT_KEYWORDS: list[str] = [
+    "鸡巴", "操你", "操我", "做爱", "性交", "色情", "淫秽", "约炮",
+    "小穴", "阴道", "阴茎", "阴部", "阴户", "阴蒂", "射精", "强奸",
+    "乱伦", "肛交", "口交", "自慰", "插入", "勃起",
+]
 # fmt: on
 
 _ANALYSIS_MAP: dict[str, tuple[str, str, str]] = {
@@ -90,6 +106,11 @@ def analyze(risk_type: str, policy_tags: list[str]) -> dict[str, Any]:
         risk_level = "high"
         action = "reject"
         analysis_result = "内容涉及未成年人性相关表达，属于严重违规，建议立即拒绝并上报。"
+    # Escalate: incest sexual content is illegal and must be rejected
+    if "乱伦涉色" in policy_tags:
+        risk_level = "high"
+        action = "reject"
+        analysis_result = "内容涉及家庭成员间性行为描写，属于违法违规内容，建议立即拒绝。"
     return {
         "risk_level": risk_level,
         "analysis_result": analysis_result,

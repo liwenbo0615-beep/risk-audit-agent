@@ -1,15 +1,64 @@
 {
-    // 使用 IntelliSense 了解相关属性。 
-    // 悬停以查看现有属性的描述。
-    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    // 调试配置：默认使用 conda 环境 agent_project 的解释器。
+    // 若 VS Code 已通过右下角选好该解释器，下面的 "python" 字段可省略。
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python 调试程序: 当前文件",
+            "name": "调试当前文件",
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
-            "console": "integratedTerminal"
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "批量 demo: agent1.py (离线)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/agent1.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "C:/Users/97422/anaconda3/envs/agent_project/python.exe",
+            "env": {
+                "OFFLINE_DEMO_MODE": "1",
+                "AUTO_REVIEW_DECISION": "skip"
+            }
+        },
+        {
+            "name": "批量 demo: agent1.py (在线 LLM)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/agent1.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "C:/Users/97422/anaconda3/envs/agent_project/python.exe",
+            "env": {
+                "OFFLINE_DEMO_MODE": "0",
+                "AUTO_REVIEW_DECISION": "skip"
+            }
+        },
+        {
+            "name": "API 服务: uvicorn",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": ["api.main:app", "--reload", "--port", "8000"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "C:/Users/97422/anaconda3/envs/agent_project/python.exe"
+        },
+        {
+            "name": "测试: 当前文件 (pytest)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["${file}", "-v", "-s"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "C:/Users/97422/anaconda3/envs/agent_project/python.exe",
+            "env": {
+                "OFFLINE_DEMO_MODE": "1"
+            }
         }
     ]
 }

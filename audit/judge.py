@@ -31,7 +31,7 @@ _CONTEXT_DEPENDENT: frozenset[str] = frozenset({"political", "unknown"})
 _VERIFY_TYPES: frozenset[str] = frozenset({"minor"})
 
 # Tags produced by compound rules — classifier is authoritative when these are present
-_HIGH_CONFIDENCE_TAGS: frozenset[str] = frozenset({"未成年涉色"})
+_HIGH_CONFIDENCE_TAGS: frozenset[str] = frozenset({"未成年涉色", "乱伦涉色"})
 
 
 @dataclass(frozen=True)
