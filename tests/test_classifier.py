@@ -106,3 +106,20 @@ def test_analyze_unknown_type_fallback():
 def test_analyze_preserves_policy_tags():
     result = analyze("spam", ["营销引流"])
     assert result["policy_tags"] == ["营销引流"]
+
+
+# ---- Compound rule: incest + sexual content ----
+
+def test_compound_incest_sexual_detected():
+    """亲属语境 + 性相关词 → illegal + 乱伦涉色 标签。"""
+    text = "妹妹你的小穴比妈妈的紧多了，怎么不想给哥哥生女儿了"
+    result = identify(text)
+    assert result["risk_type"] == "illegal"
+    assert "乱伦涉色" in result["policy_tags"]
+
+
+def test_incest_tag_escalates_to_high_reject():
+    """乱伦涉色 标签在 analyze 阶段必须升级为 high 且 reject。"""
+    analysis = analyze("illegal", ["乱伦涉色"])
+    assert analysis["risk_level"] == "high"
+    assert analysis["recommended_action"] == "reject"

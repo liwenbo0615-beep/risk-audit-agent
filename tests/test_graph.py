@@ -68,3 +68,19 @@ def test_new_state_defaults():
 def test_new_state_with_auto_decision():
     state = new_state("test", auto_decision="skip")
     assert state["auto_decision"] == "skip"
+
+
+# ---- route_by_risk: low-confidence safe must not shortcut ----
+
+def test_low_confidence_safe_does_not_shortcut():
+    """safe 但低置信度(<0.75) 不应直接出安全报告，需进入深度分析。"""
+    from audit.graph import route_by_risk
+    state = {"risk_type": "safe", "confidence": 0.5}
+    assert route_by_risk(state) == "analyze_risk"
+
+
+def test_high_confidence_safe_shortcuts():
+    """safe 且高置信度(>=0.75) 直接走安全报告分支。"""
+    from audit.graph import route_by_risk
+    state = {"risk_type": "safe", "confidence": 0.9}
+    assert route_by_risk(state) == "generate_safe_report"
