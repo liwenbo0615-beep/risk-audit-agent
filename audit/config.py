@@ -12,6 +12,7 @@ class Config:
     offline_demo_mode: bool
     llm_timeout: float
     llm_max_retries: int
+    review_store_path: str  # 异步人工复核待审队列的持久化文件
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -24,6 +25,7 @@ class Config:
             offline_demo_mode=os.getenv("OFFLINE_DEMO_MODE", "1").strip().lower() not in {"0", "false", "no"},
             llm_timeout=float(os.getenv("LLM_TIMEOUT", "8")),
             llm_max_retries=int(os.getenv("LLM_MAX_RETRIES", "0")),
+            review_store_path=os.getenv("REVIEW_STORE_PATH", "review_queue.json"),
         )
 
 

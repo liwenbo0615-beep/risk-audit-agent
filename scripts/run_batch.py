@@ -19,7 +19,7 @@ try:
 except ImportError:
     pass
 
-from audit import batch_audit
+from audit.service import batch_audit
 
 
 def main() -> None:
@@ -33,9 +33,9 @@ def main() -> None:
     parser.add_argument(
         "--auto-decision", "-d",
         choices=["approve", "reject", "skip"],
-        default="skip",
+        default="",
         dest="auto_decision",
-        help="人工复核自动决策 (默认: skip)",
+        help="人工复核自动决策；不传则命中复核时停下来交互式输入 (approve/reject/skip)",
     )
     parser.add_argument("--output", "-o", metavar="PATH", help="输出 JSON 结果到文件")
     args = parser.parse_args()

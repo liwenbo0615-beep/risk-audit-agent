@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+.DS_Store
 
 # Secrets — never commit real keys
 .env
@@ -12,10 +13,16 @@ __pycache__/
 
 # Runtime output files
 comments_result.json
-result.json
+result*.json
+review_queue.json
+lx.txt
+PROJECT_AUDIT_REPORT.md
+INTERVIEW_PREP.md
+
+# Local agent/tooling state
+.claude/
 
 # Virtual envs
 .venv/
 env/
 .conda/
-.env

@@ -3,19 +3,27 @@
 Single responsibility: given an offline result + raw text, return (needs_llm, reason_code).
 This module never touches LangGraph state, the LLM, or any I/O.
 
-Decision table
+LLM-first policy
 ──────────────────────────────────────────────────────────────────────
+The model is the primary judge. The offline classifier is only trusted to
+make the final call in two clear-cut situations; everything else is sent to
+the LLM for semantic verification (this is what catches coded / 黑话 content
+that keyword rules miss).
+
 Condition                                          LLM needed?
 ──────────────────────────────────────────────────────────────────────
-Compound rule matched (未成年涉色 tag)             No  — authoritative hit
-risk_type == "unknown"                             Yes — offline couldn't classify
-confidence < min_confidence (default 0.90)         Yes — uncertain result
-risk_type in {political, unknown}                  Yes — context-dependent (支持 vs 推翻)
-risk_type == "minor" without compound tag          Yes — keyword alone misleads
-                                                         ("未成年人不应该沉迷学习" is safe)
-risk_type == "safe" AND len(text) > safe_max_len   Yes — may have missed subtle signals
-everything else                                    No  — offline result is sufficient
+Judge disabled                                     No  — master switch off
+Compound rule matched (未成年涉色 / 乱伦涉色 tag)   No  — authoritative violation hit
+risk_type == "safe" AND text in ABSOLUTE_SAFE_TEXTS No — 固定无害短语白名单
+everything else                                    Yes — LLM-first verification
 ──────────────────────────────────────────────────────────────────────
+
+为什么用"固定白名单"而不是"长度阈值"：短不等于无害（如"约茶吗"是涉黄黑话）。
+只有明确无害的固定寒暄短语才跳过 LLM，其余一律交给模型做语义判断，避免短黑话漏检。
+
+Note: `min_confidence` is still parsed from the environment for backward
+compatibility but is no longer used as a gate — under the LLM-first policy any
+non-trivial result is verified regardless of the offline confidence score.
 """
 
 from __future__ import annotations
@@ -24,28 +32,26 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-# Risk types where a keyword match is unreliable without context
-_CONTEXT_DEPENDENT: frozenset[str] = frozenset({"political", "unknown"})
-
-# Risk types where simple keyword match often needs semantic verification
-_VERIFY_TYPES: frozenset[str] = frozenset({"minor"})
-
 # Tags produced by compound rules — classifier is authoritative when these are present
 _HIGH_CONFIDENCE_TAGS: frozenset[str] = frozenset({"未成年涉色", "乱伦涉色"})
+
+# 明确无害的固定寒暄短语白名单——只有命中这里的 safe 文本才跳过 LLM。
+# 不用长度阈值：短文本也可能是黑话（"约茶吗"），必须交给模型判断。
+ABSOLUTE_SAFE_TEXTS: frozenset[str] = frozenset({
+    "你好", "谢谢", "哈哈", "早上好", "晚安", "今天天气真好", "天气好",
+})
 
 
 @dataclass(frozen=True)
 class JudgeConfig:
     enabled: bool = True
-    min_confidence: float = 0.90
-    safe_max_len: int = 150
+    min_confidence: float = 0.90  # parsed for compat; unused under LLM-first policy
 
     @classmethod
     def from_env(cls) -> "JudgeConfig":
         return cls(
             enabled=os.getenv("JUDGE_ENABLED", "1").strip().lower() not in {"0", "false", "no"},
             min_confidence=float(os.getenv("JUDGE_MIN_CONFIDENCE", "0.90")),
-            safe_max_len=int(os.getenv("JUDGE_SAFE_MAX_LEN", "150")),
         )
 
 
@@ -54,39 +60,23 @@ class LLMCallJudge:
         self._cfg = config
 
     def should_call(self, text: str, offline_result: dict[str, Any]) -> tuple[bool, str]:
-        """Return (needs_llm, reason_code)."""
+        """Return (needs_llm, reason_code) under the LLM-first policy."""
         if not self._cfg.enabled:
             return False, "judge_disabled"
 
         risk_type: str = offline_result.get("risk_type", "unknown")
-        confidence: float = float(offline_result.get("confidence", 0.0))
         policy_tags: list[str] = offline_result.get("policy_tags", [])
 
-        # Compound rule matched → high-confidence, skip LLM
+        # Compound rule matched → authoritative violation, LLM adds nothing.
         if any(tag in _HIGH_CONFIDENCE_TAGS for tag in policy_tags):
             return False, "high_confidence_compound_rule"
 
-        # Offline couldn't classify
-        if risk_type == "unknown":
-            return True, "offline_unknown"
+        # Absolutely safe: 仅命中固定无害短语白名单的 safe 文本跳过 LLM。
+        if risk_type == "safe" and text.strip() in ABSOLUTE_SAFE_TEXTS:
+            return False, "absolutely_safe"
 
-        # Low confidence → offline result unreliable
-        if confidence < self._cfg.min_confidence:
-            return True, "low_confidence"
-
-        # Context-dependent type: identical keywords can mean opposite things
-        if risk_type in _CONTEXT_DEPENDENT:
-            return True, f"context_dependent:{risk_type}"
-
-        # Simple keyword match for minor is insufficient — needs semantic understanding
-        if risk_type in _VERIFY_TYPES:
-            return True, "minor_needs_semantic_verification"
-
-        # Safe but long text — offline may have missed subtle multi-token signals
-        if risk_type == "safe" and len(text) > self._cfg.safe_max_len:
-            return True, "safe_long_text"
-
-        return False, "offline_sufficient"
+        # LLM-first: verify everything else with the model (catches coded content).
+        return True, "llm_first"
 
 
 _judge: "LLMCallJudge | None" = None

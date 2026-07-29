@@ -27,94 +27,91 @@ def test_compound_tag_skips_llm():
     assert reason == "high_confidence_compound_rule"
 
 
-# ---- unknown type ----
+# ---- LLM-first: everything non-trivial is verified ----
 
 def test_unknown_risk_type_calls_llm():
     judge = make_judge()
     offline = {"risk_type": "unknown", "confidence": 0.0, "policy_tags": []}
     needs_llm, reason = judge.should_call("模糊内容", offline)
     assert needs_llm is True
-    assert reason == "offline_unknown"
+    assert reason == "llm_first"
 
-
-# ---- confidence threshold ----
 
 def test_low_confidence_calls_llm():
-    judge = make_judge(min_confidence=0.90)
+    judge = make_judge()
     offline = {"risk_type": "spam", "confidence": 0.80, "policy_tags": ["营销引流"]}
     needs_llm, reason = judge.should_call("优惠", offline)
     assert needs_llm is True
-    assert reason == "low_confidence"
+    assert reason == "llm_first"
 
 
-def test_at_threshold_calls_llm():
-    judge = make_judge(min_confidence=0.90)
-    offline = {"risk_type": "spam", "confidence": 0.89, "policy_tags": []}
-    needs_llm, _ = judge.should_call("内容", offline)
-    assert needs_llm is True
-
-
-def test_above_threshold_skips_llm_for_clear_types():
-    judge = make_judge(min_confidence=0.90)
+def test_high_confidence_clear_type_still_calls_llm():
+    """LLM-first: even a confident, clear-cut offline result is verified by the LLM."""
+    judge = make_judge()
     offline = {"risk_type": "illegal", "confidence": 0.90, "policy_tags": ["违法违规"]}
     needs_llm, reason = judge.should_call("逃税内容", offline)
-    assert needs_llm is False
-    assert reason == "offline_sufficient"
+    assert needs_llm is True
+    assert reason == "llm_first"
 
-
-# ---- context-dependent types ----
 
 def test_political_always_calls_llm():
     judge = make_judge()
     offline = {"risk_type": "political", "confidence": 0.90, "policy_tags": ["涉政表达"]}
     needs_llm, reason = judge.should_call("政府内容", offline)
     assert needs_llm is True
-    assert "political" in reason
+    assert reason == "llm_first"
 
-
-# ---- minor verification ----
 
 def test_minor_without_compound_calls_llm():
-    """Simple minor keyword alone should trigger LLM — "未成年人不应该沉迷学习" is actually safe."""
+    """Simple minor keyword alone is verified by the LLM — "未成年人不应该沉迷学习" is actually safe."""
     judge = make_judge()
     offline = {"risk_type": "minor", "confidence": 0.90, "policy_tags": ["未成年人保护"]}
     needs_llm, reason = judge.should_call("未成年人不应该沉迷学习", offline)
     assert needs_llm is True
-    assert reason == "minor_needs_semantic_verification"
+    assert reason == "llm_first"
 
-
-# ---- safe long text ----
-
-def test_safe_short_text_skips_llm():
-    judge = make_judge(safe_max_len=150)
-    offline = {"risk_type": "safe", "confidence": 0.92, "policy_tags": []}
-    needs_llm, reason = judge.should_call("今天天气真好", offline)
-    assert needs_llm is False
-    assert reason == "offline_sufficient"
-
-
-def test_safe_long_text_calls_llm():
-    judge = make_judge(safe_max_len=20)
-    offline = {"risk_type": "safe", "confidence": 0.92, "policy_tags": []}
-    long_text = "这是一段超过阈值的文本，里面可能有离线分类器没捕捉到的细微风险信号。"
-    needs_llm, reason = judge.should_call(long_text, offline)
-    assert needs_llm is True
-    assert reason == "safe_long_text"
-
-
-# ---- clear-case types that skip LLM ----
 
 @pytest.mark.parametrize("risk_type,tag", [
     ("illegal", "违法违规"),
     ("spam",    "营销引流"),
     ("violence","暴力血腥"),
 ])
-def test_clear_risk_types_skip_llm(risk_type, tag):
+def test_clear_risk_types_still_call_llm(risk_type, tag):
+    """Under LLM-first, clear keyword hits are no longer trusted blindly."""
     judge = make_judge()
     offline = {"risk_type": risk_type, "confidence": 0.90, "policy_tags": [tag]}
     needs_llm, reason = judge.should_call("测试内容", offline)
+    assert needs_llm is True
+    assert reason == "llm_first"
+
+
+# ---- absolutely-safe 仅限固定白名单短语 ----
+
+def test_whitelisted_safe_text_is_absolutely_safe():
+    judge = make_judge()
+    offline = {"risk_type": "safe", "confidence": 0.92, "policy_tags": []}
+    needs_llm, reason = judge.should_call("今天天气真好", offline)
     assert needs_llm is False
-    assert reason == "offline_sufficient"
+    assert reason == "absolutely_safe"
+
+
+def test_short_coded_text_is_not_absolutely_safe():
+    """'约茶吗' 虽短，但不在白名单 → 仍应升级 LLM 做语义判断（防黑话漏检）。"""
+    judge = make_judge()
+    offline = {"risk_type": "safe", "confidence": 0.92, "policy_tags": []}
+    needs_llm, reason = judge.should_call("约茶吗", offline)
+    assert needs_llm is True
+    assert reason == "llm_first"
+
+
+def test_longer_safe_text_calls_llm():
+    """Safe but non-trivial text is sent to the LLM in case keywords missed coded signals."""
+    judge = make_judge()
+    offline = {"risk_type": "safe", "confidence": 0.92, "policy_tags": []}
+    long_text = "最近压力好大，想找个茶艺师好好品品新茶，预算不是问题。"
+    needs_llm, reason = judge.should_call(long_text, offline)
+    assert needs_llm is True
+    assert reason == "llm_first"
 
 
 # ---- env-based config ----
@@ -122,11 +119,9 @@ def test_clear_risk_types_skip_llm(risk_type, tag):
 def test_judge_config_from_env(monkeypatch):
     monkeypatch.setenv("JUDGE_ENABLED", "1")
     monkeypatch.setenv("JUDGE_MIN_CONFIDENCE", "0.75")
-    monkeypatch.setenv("JUDGE_SAFE_MAX_LEN", "50")
     cfg = JudgeConfig.from_env()
     assert cfg.enabled is True
     assert cfg.min_confidence == 0.75
-    assert cfg.safe_max_len == 50
 
 
 def test_judge_config_disabled_via_env(monkeypatch):

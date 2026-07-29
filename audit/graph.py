@@ -14,6 +14,11 @@ from .nodes import (
 
 
 def route_by_risk(state: RiskState) -> Literal["generate_safe_report", "analyze_risk"]:
+    # LLM 已产出完整二级分析（risk_level/recommended_action/analysis）时，绝不能走
+    # generate_safe_report 的"安全模板"把它覆盖掉——一律进 analyze_risk（复用 LLM 结果），
+    # 再由 route_by_level 决定去向。安全捷径只用于纯离线的 safe 结果。
+    if state.get("analysis_from_llm"):
+        return "analyze_risk"
     if state["risk_type"] == "safe" and state["confidence"] >= 0.75:
         return "generate_safe_report"
     return "analyze_risk"

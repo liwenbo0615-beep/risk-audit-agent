@@ -1,12 +1,16 @@
 """LLM mode real-API test — shows judge routing in practice.
 
-    python run_llm_test.py
+    python scripts/run_llm_demo.py
 """
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 os.environ["OFFLINE_DEMO_MODE"] = "0"
 os.environ["AUTO_REVIEW_DECISION"] = "skip"
@@ -14,11 +18,11 @@ os.environ["AUDIT_LOG_PATH"] = "audit_log_llm_test.jsonl"
 
 try:
     from dotenv import load_dotenv
-    load_dotenv(Path(__file__).parent / ".env")
+    load_dotenv(PROJECT_ROOT / ".env")
 except ImportError:
     pass
 
-from audit import audit_one
+from audit.service import audit_one
 from audit.config import reset_config
 from audit.judge import reset_judge
 

@@ -53,6 +53,7 @@ _ANALYSIS_MAP: dict[str, tuple[str, str, str]] = {
     "illegal":   ("high",   "内容涉及违法违规方法或规避监管，需要拒绝或人工确认。",         "reject"),
     "political": ("medium", "内容涉及政治表达，语义较敏感，建议人工复核判断上下文。",       "manual_review"),
     "minor":     ("medium", "内容涉及未成年人语境，需结合上下文判断是否存在保护风险。",     "manual_review"),
+    "adult":     ("high",   "内容包含成人色情/淫秽材料，违反平台内容规则，建议拒绝。",       "reject"),
     "violence":  ("medium", "内容提到暴力或血腥画面，建议人工复核素材上下文。",             "manual_review"),
     "spam":      ("low",    "内容疑似营销引流，风险较低，可按平台策略处理。",               "approve"),
     "safe":      ("none",   "未识别到明显内容安全风险。",                                   "approve"),
@@ -87,7 +88,7 @@ def identify(text: str) -> dict[str, Any]:
     adult_hits = [kw for kw in _ADULT_KEYWORDS if kw in text]
     if adult_hits:
         return {
-            "risk_type": "minor",
+            "risk_type": "adult",
             "confidence": 0.85,
             "policy_tags": ["成人色情"],
             "evidence": adult_hits[:3],

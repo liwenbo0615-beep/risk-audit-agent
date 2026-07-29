@@ -1,6 +1,4 @@
 {
-    // 调试配置：默认使用 conda 环境 agent_project 的解释器。
-    // 若 VS Code 已通过右下角选好该解释器，下面的 "python" 字段可省略。
     "version": "0.2.0",
     "configurations": [
         {
@@ -12,29 +10,21 @@
             "cwd": "${workspaceFolder}"
         },
         {
-            "name": "批量 demo: agent1.py (离线)",
+            "name": "批量 demo: run_batch.py",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/agent1.py",
+            "program": "${workspaceFolder}/scripts/run_batch.py",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
-            "python": "C:/Users/97422/anaconda3/envs/agent_project/python.exe",
+            "args": [
+                "-c",
+                "今天天气真好",
+                "教你怎么逃税不被发现",
+                "-d",
+                "skip"
+            ],
             "env": {
-                "OFFLINE_DEMO_MODE": "1",
-                "AUTO_REVIEW_DECISION": "skip"
-            }
-        },
-        {
-            "name": "批量 demo: agent1.py (在线 LLM)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/agent1.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "python": "C:/Users/97422/anaconda3/envs/agent_project/python.exe",
-            "env": {
-                "OFFLINE_DEMO_MODE": "0",
-                "AUTO_REVIEW_DECISION": "skip"
+                "OFFLINE_DEMO_MODE": "1"
             }
         },
         {
@@ -44,8 +34,7 @@
             "module": "uvicorn",
             "args": ["api.main:app", "--reload", "--port", "8000"],
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "python": "C:/Users/97422/anaconda3/envs/agent_project/python.exe"
+            "cwd": "${workspaceFolder}"
         },
         {
             "name": "测试: 当前文件 (pytest)",
@@ -55,7 +44,6 @@
             "args": ["${file}", "-v", "-s"],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
-            "python": "C:/Users/97422/anaconda3/envs/agent_project/python.exe",
             "env": {
                 "OFFLINE_DEMO_MODE": "1"
             }

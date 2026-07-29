@@ -107,25 +107,34 @@ def identify_risk(state: RiskState) -> RiskState:
             state["judge_reason"] = "llm_unavailable_no_api_key"
         return state
 
-    # Step 4: judge requested escalation → verify with the LLM API
+    # Step 4: judge requested escalation → 一次 LLM 调用同时产出"识别 + 分析"，
+    # analyze_risk 直接复用，避免对同一条内容付两次费（成本优化）。
     prompt = """
-你是内容安全 Agent 的风险识别节点，负责给 UGC 评论做一级分流。
+你是内容安全 Agent 的风险研判节点，对 UGC 评论做一次性的"识别 + 分级"。
 请只返回 JSON，不要输出 markdown。
 
 字段要求：
-- risk_type: political/minor/illegal/violence/spam/safe/unknown
+- risk_type: political/minor/adult/illegal/violence/spam/safe/unknown
 - confidence: 0 到 1 的小数
-- policy_tags: 命中的策略标签数组，例如 ["涉政表达", "违法教程", "成人色情", "乱伦"]
+- policy_tags: 命中的策略标签数组，例如 ["涉政表达", "违法教程", "成人色情", "乱伦涉色"]
 - evidence: 从原文中摘取不超过 3 个关键证据，不能编造
+- risk_level: high/medium/low/none/unknown
+- recommended_action: approve/reject/manual_review（不允许 skip；skip 只属于人工决策）
+- analysis_result: 用中文说明主要风险、上下文判断、误杀可能性，120 字以内
 
-判定口径：
-- political: 涉及政治人物、制度、政权、敏感公共事件或煽动性政治表达
-- minor: 涉及未成年人保护、诱导、伤害，或含有明确性行为描写（色情、淫秽、乱伦等成人内容）
-- illegal: 涉及违法犯罪、规避监管、黑灰产、毒品、武器、诈骗等
+风险类型口径：
+- political: 政治人物 / 制度 / 政权 / 敏感公共事件 / 煽动性政治表达
+- minor: 涉及未成年人保护、诱导、伤害，或未成年人 × 性相关内容
+- adult: 成人（非未成年）色情、淫秽、性交易等明确成人性内容
+- illegal: 违法犯罪、规避监管、黑灰产、毒品、武器、诈骗
 - violence: 暴力、血腥、威胁、仇恨攻击
-- spam: 广告引流、刷量、博彩、疑似营销灌水
+- spam: 广告引流、刷量、博彩、营销灌水
 - safe: 普通闲聊、生活分享、无明显风险
-- unknown: 信息不足或模型无法确定
+- unknown: 信息不足或无法确定
+
+处置口径：
+- high → 建议 reject / manual_review；medium → manual_review；
+  low → approve / manual_review；none → approve；unknown → manual_review
 """
     try:
         response = get_llm().invoke([
@@ -137,6 +146,15 @@ def identify_risk(state: RiskState) -> RiskState:
         state["confidence"] = _clamp_float(data.get("confidence"))
         state["policy_tags"] = [str(t)[:40] for t in data.get("policy_tags", [])][:5]
         state["evidence"] = [str(e)[:120] for e in data.get("evidence", [])][:3]
+        # 同一次调用顺带产出二级分析，供 analyze_risk 复用
+        state["risk_level"] = _normalize_label(data.get("risk_level"), ALLOWED_RISK_LEVELS, "unknown")  # type: ignore[typeddict-item]
+        state["recommended_action"] = _normalize_label(  # type: ignore[typeddict-item]
+            data.get("recommended_action"),
+            {"approve", "reject", "manual_review"},  # skip 不是模型建议动作，只属于人工决策
+            "manual_review",
+        )
+        state["analysis_result"] = str(data.get("analysis_result", "")).strip()[:500]
+        state["analysis_from_llm"] = True
         state["llm_called"] = True
         state["judge_reason"] = f"escalated:{reason}"
         return state
@@ -149,60 +167,20 @@ def identify_risk(state: RiskState) -> RiskState:
 
 
 def analyze_risk(state: RiskState) -> RiskState:
-    """Run second-pass risk analysis.
+    """二级分析（定 risk_level + recommended_action）。
 
-    Uses LLM only when identify_risk already used LLM for this request.
-    If identify_risk fell back to offline, so do we.
+    成本优化：identify_risk 升级 LLM 时已在同一次调用里产出了二级分析
+    （analysis_from_llm=True），这里直接复用，不再二次调用 LLM——单条内容
+    最多一次付费调用。其余情况（离线 / LLM 失败降级）走离线确定性分析映射。
     """
-    cfg = get_config()
-    use_llm = state.get("llm_called", False) and not cfg.offline_demo_mode
+    if state.get("analysis_from_llm"):
+        return state  # risk_level / recommended_action / analysis_result 已由 identify_risk 写入
 
-    if not use_llm:
-        data = classifier.analyze(state["risk_type"], state["policy_tags"])
-        state["risk_level"] = data["risk_level"]  # type: ignore[typeddict-item]
-        state["analysis_result"] = data["analysis_result"]
-        state["recommended_action"] = data["recommended_action"]  # type: ignore[typeddict-item]
-        state["policy_tags"] = data["policy_tags"]
-        return state
-
-    prompt = f"""
-你是内容安全 Agent 的深度分析节点。当前一级分类为 {state["risk_type"]}。
-请结合平台审核策略，输出可落地的二级判断。只返回 JSON。
-
-字段要求：
-- risk_level: high/medium/low/none/unknown
-- analysis_result: 用中文说明主要风险、上下文判断、误杀可能性，120 字以内
-- recommended_action: approve/reject/manual_review/skip
-- policy_tags: 可以补充或修正策略标签数组
-
-处置口径：
-- high: 明确违法违规、严重伤害、明确煽动或高危未成年人风险，建议 reject 或 manual_review
-- medium: 有明显风险但需要上下文，建议 manual_review
-- low: 轻微风险或边界表达，建议 approve 或 manual_review
-- none: 无风险，建议 approve
-- unknown: 信息不足、模型异常或证据不充分，建议 manual_review
-"""
-    try:
-        response = get_llm().invoke([
-            SystemMessage(content=prompt),
-            HumanMessage(content=state["normalized_input"]),
-        ])
-        data = _extract_json(response.content)
-        state["risk_level"] = _normalize_label(data.get("risk_level"), ALLOWED_RISK_LEVELS, "unknown")  # type: ignore[typeddict-item]
-        state["analysis_result"] = str(data.get("analysis_result", "")).strip()[:500]
-        state["recommended_action"] = _normalize_label(  # type: ignore[typeddict-item]
-            data.get("recommended_action"),
-            {"approve", "reject", "manual_review", "skip"},
-            "manual_review",
-        )
-        merged = [*state["policy_tags"], *data.get("policy_tags", [])]
-        state["policy_tags"] = list(dict.fromkeys(str(t)[:40] for t in merged if t))[:8]
-    except Exception as exc:
-        data = classifier.analyze(state["risk_type"], state["policy_tags"])
-        state["risk_level"] = data["risk_level"]  # type: ignore[typeddict-item]
-        state["analysis_result"] = data["analysis_result"]
-        state["recommended_action"] = data["recommended_action"]  # type: ignore[typeddict-item]
-        state["model_error"] = f"analyze_risk LLM failed, using offline fallback: {exc}"
+    data = classifier.analyze(state["risk_type"], state["policy_tags"])
+    state["risk_level"] = data["risk_level"]  # type: ignore[typeddict-item]
+    state["analysis_result"] = data["analysis_result"]
+    state["recommended_action"] = data["recommended_action"]  # type: ignore[typeddict-item]
+    state["policy_tags"] = data["policy_tags"]
     return state
 
 
@@ -243,24 +221,48 @@ def human_review(state: RiskState) -> RiskState:
     print(f"LLM 已调用  : {state.get('llm_called', False)} ({state.get('judge_reason', '')})")
     print(f"{'!' * 60}")
 
-    cfg = get_config()
-    override = state.get("auto_decision") or cfg.auto_review_decision
+    # 只认显式传入的 state["auto_decision"]（CLI -d / API）。不再读取
+    # cfg.auto_review_decision，避免环境变量在背后把人工复核静默跳过。
+    override = state.get("auto_decision", "")
+    # 显式"待人工"信号（API / 服务化无人值守）：不调用 input()，直接挂起为 pending。
+    if override == "pending":
+        print("标记为 pending_review（待人工复核）")
+        state["review_status"] = "pending"
+        state["human_decision"] = ""
+        return state
     if override in {"approve", "reject", "skip"}:
         state["human_decision"] = override
+        state["review_status"] = "decided"
         print(f"自动决策: {override}")
         return state
 
     while True:
-        decision = input("请输入人工决策 [approve/reject/skip]: ").strip().lower()
+        try:
+            decision = input("请输入人工决策 [approve/reject/skip]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            # 非交互环境（管道/CI/无 TTY）或用户中断：标记为待人工复核(pending)，
+            # 既不崩溃丢结果，也不伪造成"真人 skip"，语义清晰。
+            print("\n无交互输入，标记为 pending_review（待人工复核）")
+            state["review_status"] = "pending"
+            state["human_decision"] = ""
+            return state
         if decision in {"approve", "reject", "skip"}:
             state["human_decision"] = decision
+            state["review_status"] = "decided"
             break
         print("输入无效，请重新输入")
     return state
 
 
 def generate_report(state: RiskState) -> RiskState:
-    final_action = state["human_decision"] or state["recommended_action"]
+    # final_action 语义：真人/显式决策优先；命中复核但无人决策 → pending_review；
+    # 其余（未进复核的低风险）→ 采用模型建议动作。
+    if state["human_decision"]:
+        final_action = state["human_decision"]
+    elif state.get("review_status") == "pending":
+        final_action = "pending_review"
+    else:
+        final_action = state["recommended_action"]
     report = {
         "trace_id": state["trace_id"],
         "risk_type": state["risk_type"],

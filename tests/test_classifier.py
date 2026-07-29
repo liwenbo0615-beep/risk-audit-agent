@@ -62,13 +62,19 @@ def test_age_without_sexual_is_normal_minor():
     assert "未成年涉色" not in result["policy_tags"]
 
 
-# ---- Adult content fallback ----
+# ---- Adult content fallback (独立 adult 类型，与 minor 区分) ----
 
 def test_adult_content_without_minor_context():
     result = identify("操你，做爱")
-    assert result["risk_type"] == "minor"
+    assert result["risk_type"] == "adult"
     assert result["policy_tags"] == ["成人色情"]
     assert result["confidence"] == 0.85
+
+
+def test_analyze_adult_gives_high_reject():
+    result = analyze("adult", ["成人色情"])
+    assert result["risk_level"] == "high"
+    assert result["recommended_action"] == "reject"
 
 
 # ---- analyze() ----
